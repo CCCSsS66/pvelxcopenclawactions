@@ -1,4 +1,4 @@
-name: Build OpenClaw LXC Template
+name: Build OpenClaw LXC 2
 
 on:
   workflow_dispatch:
@@ -128,7 +128,7 @@ jobs:
         run: |
           set -Eeuo pipefail
 
-          cat > /tmp/build-openclaw-lxc-ci.sh <<'BUILDER'
+          cat > /tmp/build-openclaw-lxc.sh <<'BUILDER'
           #!/usr/bin/env bash
           set -Eeuo pipefail
 
@@ -183,7 +183,7 @@ jobs:
 
           require_root() {
             if [ "$(id -u)" != "0" ]; then
-              die "构建脚本必须以 root 运行。GitHub Actions 中请使用：sudo -E bash /tmp/build-openclaw-lxc-ci.sh"
+              die "构建脚本必须以 root 运行"
             fi
           }
 
@@ -1043,12 +1043,12 @@ jobs:
             tar -tzf "$IMAGE_PATH" > "$LIST_FILE"
 
             if ! grep -Eq '^\./usr/bin/openclaw$|^\./usr/local/bin/openclaw$' "$LIST_FILE"; then
-              grep -i 'openclaw' "$LIST_FILE" | head -100 || true
+              grep -i 'openclaw' "$LIST_FILE" | sed -n '1,100p' || true
               die "镜像中没有 openclaw 命令"
             fi
 
             if ! grep -Eq '^\./usr/lib/node_modules/openclaw/|^\./usr/local/lib/node_modules/openclaw/' "$LIST_FILE"; then
-              grep 'node_modules' "$LIST_FILE" | head -100 || true
+              grep 'node_modules' "$LIST_FILE" | sed -n '1,100p' || true
               die "镜像中没有 openclaw node_modules 目录"
             fi
 
@@ -1124,14 +1124,10 @@ jobs:
           main "$@"
           BUILDER
 
-          chmod +x /tmp/build-openclaw-lxc-ci.sh
+          chmod +x /tmp/build-openclaw-lxc.sh
 
-          # 关键修复：
-          # 整个构建脚本必须以 root 运行。
-          # -E 用来保留 GitHub Actions 传入的环境变量。
-          sudo -E bash /tmp/build-openclaw-lxc-ci.sh
+          sudo -E bash /tmp/build-openclaw-lxc.sh
 
-          # 构建脚本用 root 生成 dist，这里把 dist 权限交还给 runner，方便后续 upload/release。
           sudo chown -R "$USER:$USER" dist
 
       - name: Verify dist
@@ -1149,11 +1145,27 @@ jobs:
 
           tar -tzf "$IMAGE" > /tmp/image-list.txt
 
+          echo "检查 openclaw 命令..."
+          grep -Eq '^\./usr/bin/openclaw$|^\./usr/local/bin/openclaw$' /tmp/image-list.txt
           grep -E '^\./usr/bin/openclaw$|^\./usr/local/bin/openclaw$' /tmp/image-list.txt
-          grep -E '^\./usr/lib/node_modules/openclaw/|^\./usr/local/lib/node_modules/openclaw/' /tmp/image-list.txt | head -5
+
+          echo
+          echo "检查 openclaw node_modules..."
+          grep -Eq '^\./usr/lib/node_modules/openclaw/|^\./usr/local/lib/node_modules/openclaw/' /tmp/image-list.txt
+          grep -m 5 -E '^\./usr/lib/node_modules/openclaw/|^\./usr/local/lib/node_modules/openclaw/' /tmp/image-list.txt
+
+          echo
+          echo "检查 systemd 服务..."
+          grep -Eq '^\./etc/systemd/system/openclaw.service$' /tmp/image-list.txt
           grep -E '^\./etc/systemd/system/openclaw.service$' /tmp/image-list.txt
+
+          echo
+          echo "检查 firstboot 脚本..."
+          grep -Eq '^\./usr/local/bin/openclaw-firstboot$' /tmp/image-list.txt
           grep -E '^\./usr/local/bin/openclaw-firstboot$' /tmp/image-list.txt
 
+          echo
+          echo "验证通过。"
           echo
           cat dist/build-info.txt
 
@@ -1235,7 +1247,10 @@ jobs:
           set -Eeuo pipefail
 
           if gh release view "$TAG_NAME" >/dev/null 2>&1; then
-            echo "Release 已存在，覆盖上传资产"
+            echo "Release 已存在，更新说明并覆盖上传资产"
+            gh release edit "$TAG_NAME" \
+              --title "OpenClaw LXC Template $TAG_NAME" \
+              --notes-file release-notes.md
           else
             if [[ "$PRERELEASE" == "true" ]]; then
               gh release create "$TAG_NAME" \
