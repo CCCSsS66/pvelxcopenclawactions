@@ -622,7 +622,6 @@ jobs:
 
           systemctl daemon-reload
           systemctl enable openclaw >/dev/null 2>&1 || true
-          systemctl restart openclaw || true
 
           {
             echo
@@ -820,8 +819,7 @@ jobs:
           [Unit]
           Description=OpenClaw Service
           After=network-online.target openclaw-firstboot.service
-          Wants=network-online.target
-          Requires=openclaw-firstboot.service
+          Wants=network-online.target openclaw-firstboot.service
 
           [Service]
           Type=simple
@@ -829,6 +827,7 @@ jobs:
           Group=openclaw
           EnvironmentFile=-/etc/openclaw/openclaw.env
           WorkingDirectory=/var/lib/openclaw
+          ExecStartPre=/usr/local/bin/openclaw-firstboot
           ExecStart=/usr/local/bin/openclaw-launcher
           Restart=always
           RestartSec=5
@@ -941,10 +940,42 @@ jobs:
 
             virt-ls -a "$IMAGE" -R / > "$OUT_LIST"
 
-            grep -q '^/usr/bin/openclaw$' "$OUT_LIST" || die "镜像中没有 /usr/bin/openclaw"
-            grep -q '^/opt/openclaw-runtime/lib/node_modules/openclaw' "$OUT_LIST" || die "镜像中没有 OpenClaw node_modules"
-            grep -q '^/etc/systemd/system/openclaw.service$' "$OUT_LIST" || die "镜像中没有 openclaw.service"
-            grep -q '^/usr/local/bin/openclaw-firstboot$' "$OUT_LIST" || die "镜像中没有 openclaw-firstboot"
+            log "检查 /usr/bin/openclaw"
+            if ! virt-ls -a "$IMAGE" /usr/bin | grep -qx 'openclaw'; then
+              echo "调试：/usr/bin 中的相关文件："
+              virt-ls -a "$IMAGE" /usr/bin | grep -Ei 'openclaw|node|npm|pnpm' || true
+              die "镜像中没有 /usr/bin/openclaw"
+            fi
+
+            log "检查 /opt/openclaw-runtime/lib/node_modules/openclaw"
+            if ! virt-ls -a "$IMAGE" /opt/openclaw-runtime/lib/node_modules | grep -qx 'openclaw'; then
+              echo "调试：/opt/openclaw-runtime/lib/node_modules 内容："
+              virt-ls -a "$IMAGE" /opt/openclaw-runtime/lib/node_modules || true
+              die "镜像中没有 OpenClaw node_modules"
+            fi
+
+            log "检查 openclaw.service"
+            if ! virt-ls -a "$IMAGE" /etc/systemd/system | grep -qx 'openclaw.service'; then
+              echo "调试：/etc/systemd/system 中的 openclaw 文件："
+              virt-ls -a "$IMAGE" /etc/systemd/system | grep -i openclaw || true
+              die "镜像中没有 openclaw.service"
+            fi
+
+            log "检查 openclaw-firstboot"
+            if ! virt-ls -a "$IMAGE" /usr/local/bin | grep -qx 'openclaw-firstboot'; then
+              echo "调试：/usr/local/bin 中的 openclaw 文件："
+              virt-ls -a "$IMAGE" /usr/local/bin | grep -i openclaw || true
+              die "镜像中没有 openclaw-firstboot"
+            fi
+
+            {
+              echo
+              echo "# Verified important files"
+              echo "/usr/bin/openclaw"
+              echo "/opt/openclaw-runtime/lib/node_modules/openclaw"
+              echo "/etc/systemd/system/openclaw.service"
+              echo "/usr/local/bin/openclaw-firstboot"
+            } >> "$OUT_LIST"
 
             log "文件列表验证通过"
           }
@@ -1022,11 +1053,16 @@ jobs:
 
           xz -t "$IMAGE"
 
-          grep -q '^/usr/bin/openclaw$' dist/*.list
-          grep -q '^/opt/openclaw-runtime/lib/node_modules/openclaw' dist/*.list
-          grep -q '^/etc/systemd/system/openclaw.service$' dist/*.list
-          grep -q '^/usr/local/bin/openclaw-firstboot$' dist/*.list
+          LIST_FILE="$(ls -t dist/*.list | head -1)"
+          echo "LIST_FILE=$LIST_FILE"
 
+          grep -Eq '(^|/)usr/bin/openclaw$|^/usr/bin/openclaw$' "$LIST_FILE"
+          grep -Eq '(^|/)opt/openclaw-runtime/lib/node_modules/openclaw' "$LIST_FILE"
+          grep -Eq '(^|/)etc/systemd/system/openclaw.service$|^/etc/systemd/system/openclaw.service$' "$LIST_FILE"
+          grep -Eq '(^|/)usr/local/bin/openclaw-firstboot$|^/usr/local/bin/openclaw-firstboot$' "$LIST_FILE"
+
+          echo "验证通过。"
+          echo
           cat dist/build-info.txt
 
       - name: Upload artifact
@@ -1081,6 +1117,15 @@ jobs:
             --vga serial0
 
           qm template 9000
+          \`\`\`
+
+          ## 克隆使用示例
+
+          \`\`\`bash
+          qm clone 9000 101 --name openclaw-101
+          qm set 101 --ciuser root --cipassword '你的密码'
+          qm set 101 --ipconfig0 ip=dhcp
+          qm start 101
           \`\`\`
 
           ## 进入系统后
