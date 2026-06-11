@@ -8,7 +8,7 @@ on:
         required: true
         default: "auto"
       openclaw_version:
-        description: "OpenClaw 版本"
+        description: "OpenClaw 版本，例如 latest"
         required: true
         default: "latest"
       run_as_root:
@@ -32,14 +32,6 @@ on:
           - "lan"
           - "loopback"
           - "auto"
-      publish_release:
-        description: "是否上传到 GitHub Releases"
-        required: true
-        default: "true"
-        type: choice
-        options:
-          - "true"
-          - "false"
 
 permissions:
   contents: write
@@ -54,16 +46,14 @@ jobs:
       INPUT_RUN_AS_ROOT: ${{ inputs.run_as_root }}
       INPUT_GATEWAY_PORT: ${{ inputs.gateway_port }}
       INPUT_GATEWAY_BIND: ${{ inputs.gateway_bind }}
-      INPUT_PUBLISH_RELEASE: ${{ inputs.publish_release }}
       GH_TOKEN: ${{ github.token }}
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
       - name: Install build tools
+        shell: bash
         run: |
-          set -eux
+          set -euxo pipefail
+
           sudo apt-get update
           sudo apt-get install -y \
             debootstrap \
@@ -80,7 +70,9 @@ jobs:
             util-linux \
             gh
 
-      - name: Build OpenClaw LXC template
+          gh --version
+
+      - name: Build and publish OpenClaw LXC template
         shell: bash
         run: |
           cat > build-openclaw-lxc.sh <<'BUILD_SCRIPT'
@@ -94,7 +86,6 @@ jobs:
           RUN_AS_ROOT="${INPUT_RUN_AS_ROOT:-true}"
           GATEWAY_PORT="${INPUT_GATEWAY_PORT:-18789}"
           GATEWAY_BIND="${INPUT_GATEWAY_BIND:-lan}"
-          PUBLISH_RELEASE="${INPUT_PUBLISH_RELEASE:-true}"
 
           if [ "$VERSION" = "auto" ]; then
             VERSION="$(date -u +'%Y.%m.%d-%H%M')"
@@ -102,6 +93,11 @@ jobs:
 
           IMAGE_PREFIX="openclaw-lxc-debian12"
           IMAGE_NAME="${IMAGE_PREFIX}-${VERSION}.tar.gz"
+          RUN_USER="openclaw"
+
+          if [ "$RUN_AS_ROOT" = "true" ]; then
+            RUN_USER="root"
+          fi
 
           WORK_DIR="$PWD/work"
           ROOTFS="$WORK_DIR/rootfs"
@@ -323,6 +319,7 @@ jobs:
           mkdir -p "$OPENCLAW_HOME/.openclaw/workspace"
           mkdir -p "$OPENCLAW_HOME/.openclaw/agents/main/sessions"
           mkdir -p "$OPENCLAW_HOME/.openclaw/agents/main/agent"
+
           chown -R "$OPENCLAW_USER:$OPENCLAW_GROUP" "$OPENCLAW_HOME/.openclaw" || true
 
           cat >/etc/openclaw-lxc.env <<ENV_CONF
@@ -845,9 +842,18 @@ jobs:
           - 支持 openclaw-api-setup 配置自定义 API
           - Gateway 端口：$GATEWAY_PORT
           - Gateway 绑定：$GATEWAY_BIND
-          - OpenClaw 运行用户：$OPENCLAW_USER
+          - OpenClaw 运行用户：$RUN_USER
 
           ## PVE 创建示例
+
+          下载到 PVE：
+
+          \`\`\`bash
+          cd /var/lib/vz/template/cache
+          wget <Release 里的 $IMAGE_NAME 下载地址>
+          \`\`\`
+
+          创建 CT：
 
           \`\`\`bash
           pct create 101 local:vztmpl/$IMAGE_NAME \\
@@ -890,38 +896,44 @@ jobs:
           ls -lh "$IMAGE_NAME" "$IMAGE_NAME.sha256" RELEASE.md
 
           echo "=================================================="
-          echo "[8/8] 发布 Release"
+          echo "[8/8] 强制发布 GitHub Release"
           echo "=================================================="
 
-          if [ "$PUBLISH_RELEASE" = "true" ]; then
-            TAG="openclaw-lxc-${VERSION}"
-            TITLE="OpenClaw LXC ${VERSION}"
+          TAG="openclaw-lxc-${VERSION}"
+          TITLE="OpenClaw LXC ${VERSION}"
 
-            if gh release view "$TAG" >/dev/null 2>&1; then
-              gh release upload "$TAG" "$IMAGE_NAME" "$IMAGE_NAME.sha256" RELEASE.md --clobber
-            else
-              gh release create "$TAG" "$IMAGE_NAME" "$IMAGE_NAME.sha256" RELEASE.md \
-                --title "$TITLE" \
-                --notes-file RELEASE.md
-            fi
+          echo "Repository: $GITHUB_REPOSITORY"
+          echo "Tag: $TAG"
+          echo "Image: $IMAGE_NAME"
+
+          gh auth status --hostname github.com || true
+
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release 已存在，覆盖上传文件"
+            gh release upload "$TAG" \
+              "$IMAGE_NAME" \
+              "$IMAGE_NAME.sha256" \
+              RELEASE.md \
+              --repo "$GITHUB_REPOSITORY" \
+              --clobber
           else
-            echo "跳过 Release 发布"
+            echo "Release 不存在，创建 Release 并上传文件"
+            gh release create "$TAG" \
+              "$IMAGE_NAME" \
+              "$IMAGE_NAME.sha256" \
+              RELEASE.md \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "$TITLE" \
+              --notes-file RELEASE.md
           fi
 
-          echo "IMAGE_NAME=$IMAGE_NAME" >> "$GITHUB_ENV"
-          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "=================================================="
+          echo "Release 上传完成"
+          echo "=================================================="
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY"
 
           BUILD_SCRIPT
 
           chmod +x build-openclaw-lxc.sh
           ./build-openclaw-lxc.sh
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: openclaw-lxc-template
-          path: |
-            dist/*.tar.gz
-            dist/*.sha256
-            dist/RELEASE.md
-          retention-days: 7
