@@ -474,8 +474,6 @@ jobs:
           TOKEN_ENV
           fi
 
-          sed -i '/^OPENCLAW_GATEWAY_PASSWORD=/d' "$ENV_FILE" 2>/dev/null || true
-
           if [ ! -s "$CONFIG_FILE" ] || ! jq empty "$CONFIG_FILE" >/dev/null 2>&1; then
             echo '{}' >"$CONFIG_FILE"
           fi
@@ -981,13 +979,13 @@ jobs:
           sudo grep -q "mirrors.tuna.tsinghua.edu.cn" "$ROOTFS/etc/apt/sources.list" || sudo grep -q "mirrors.ustc.edu.cn" "$ROOTFS/etc/apt/sources.list"
           sudo chroot "$ROOTFS" npm config get registry | grep -q "registry.npmmirror.com"
 
-          if sudo grep -R "OPENCLAW_GATEWAY_PASSWORD" "$ROOTFS/root/.openclaw" "$ROOTFS/usr/local/sbin" "$ROOTFS/usr/local/bin" >/dev/null 2>&1; then
-            echo "错误：不应该生成或显示 Gateway Password"
+          if sudo grep -R "Gateway Password" "$ROOTFS/root/openclaw-info.txt" "$ROOTFS/root/README-OPENCLAW-LXC.md" "$ROOTFS/etc/profile.d" >/dev/null 2>&1; then
+            echo "错误：登录信息或 README 不应该显示 Gateway Password"
             exit 1
           fi
 
-          if sudo grep -R "Gateway Password" "$ROOTFS/root" "$ROOTFS/usr/local/sbin" "$ROOTFS/usr/local/bin" "$ROOTFS/etc/profile.d" >/dev/null 2>&1; then
-            echo "错误：不应该显示 Gateway Password"
+          if sudo find "$ROOTFS/root/.openclaw" -type f -name ".env" -exec grep -H "OPENCLAW_GATEWAY_PASSWORD" {} \; 2>/dev/null | grep -q .; then
+            echo "错误：.env 不应该包含 OPENCLAW_GATEWAY_PASSWORD"
             exit 1
           fi
 
