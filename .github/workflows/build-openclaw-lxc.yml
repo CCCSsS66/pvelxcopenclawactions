@@ -1,4 +1,4 @@
-name: Build OpenClaw LXC
+name: Build OpenClaw LXC 2
 
 on:
   workflow_dispatch:
